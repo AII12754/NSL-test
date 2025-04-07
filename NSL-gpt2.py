@@ -2,7 +2,9 @@ import numpy as np
 import torch
 import time
 import math
+
 torch.set_printoptions(8)
+
 
 def gelu(x):
     """
@@ -15,7 +17,7 @@ def gelu(x):
         Input: Tensor
         Output: Tensor
     """
-    pass
+    return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
 
 def softmax(x):
@@ -24,10 +26,12 @@ def softmax(x):
         Input: Tensor
         Output: Tensor
     """
-    pass
+    max_x = torch.max(x, dim=-1, keepdim=True).values
+    e_x = torch.exp(x - max_x)
+    return e_x / torch.sum(e_x, dim=-1, keepdim=True)
 
 
-def layer_norm(x, g_b, eps:float = 1e-5):
+def layer_norm(x, g_b, eps: float = 1e-5):
     """
         Task: Use torch API to implement `layernorm` function, search `layernorm` by yourself
         Input: 
@@ -36,8 +40,10 @@ def layer_norm(x, g_b, eps:float = 1e-5):
         Output: Tensor
     """
     g, b = torch.Tensor(g_b['g']), torch.Tensor(g_b['b'])
-    
-    pass
+    mean = x.mean(-1, keepdim=True)
+    var = x.var(-1, unbiased=False, keepdim=True)
+    return g * (x - mean) / torch.sqrt(var + eps) + b
+
 
 def linear(x, w_b):  # [m, in], [in, out], [out] -> [m, out]
     """
@@ -48,8 +54,9 @@ def linear(x, w_b):  # [m, in], [in, out], [out] -> [m, out]
         Output: Tensor
     """
     w, b = w_b['w'], w_b['b']
-    pass
-    
+
+    return (x @ w) + b
+
 
 def ffn(x, mlp):  # [n_seq, n_embd] -> [n_seq, n_embd]
     """
@@ -61,7 +68,12 @@ def ffn(x, mlp):  # [n_seq, n_embd] -> [n_seq, n_embd]
         Output: Tensor
     """
     w_b1, w_b2 = mlp['c_fc'], mlp['c_proj']
-    pass
+
+    x = linear(x, w_b1)
+
+    x = gelu(x)
+
+    return linear(x, w_b2)
 
 
 def attention(q, k, v, mask):  # [n_q, d_k], [n_k, d_k], [n_k, d_v], [n_q, n_k] -> [n_q, d_v]
@@ -77,7 +89,10 @@ def attention(q, k, v, mask):  # [n_q, d_k], [n_k, d_k], [n_k, d_v], [n_q, n_k] 
             mlp: dictionary that load from gpt2 weight. w_b1 and w_b2 are the params of two linear layer
         Output: Tensor
     """
-    pass
+    scores = q @ k.T / math.sqrt(k.size(-1))
+    scores = scores + mask
+    return softmax(scores) @ v
+
 
 def mha(x, attn, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
     """
@@ -92,16 +107,17 @@ def mha(x, attn, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
     c_attn, c_proj = attn['c_attn'], attn['c_proj']
     # qkv projection
     x = linear(x, c_attn)  # [n_seq, n_embd] -> [n_seq, 3*n_embd]
-    
+
     # Split into qkv
     """
         Task: Split the q,k,v matrix from the tensor x
         Notes: [n_seq, 3*n_embd] -> 3 * [n_seq, n_embd]
     """
-    qkv = None # need to modify
+    qkv = x.chunk(3, dim=-1)  # need to modify
 
     # Split into heads
-    qkv_heads = [qkv_part.chunk(n_head, dim=-1) for qkv_part in qkv]  # 3 * [n_seq, n_embd] -> 3 * n_head * [n_seq, n_embd/n_head]
+    qkv_heads = [qkv_part.chunk(n_head, dim=-1) for qkv_part in
+                 qkv]  # 3 * [n_seq, n_embd] -> 3 * n_head * [n_seq, n_embd/n_head]
     qkv_heads = list(zip(*qkv_heads))  # [3, n_head, n_seq, n_embd/n_head]
 
     # Causal mask to hide future inputs from being attended to
@@ -115,27 +131,27 @@ def mha(x, attn, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
             | 0    0    0  ...   0  |
         Mask is a tensor whose dimension is [n_seq, n_seq]
     """
-    causal_mask = None # need to modify
+    causal_mask = torch.triu(torch.full((qkv.size(0), qkv.size(0)), float('-inf')), diagonal=1)  # need to modify
 
     # Perform attention over each head
     out_heads = [attention(q, k, v, causal_mask) for q, k, v in qkv_heads]  # n_head * [n_seq, n_embd/n_head]
-    
+
     # Merge heads
     """
         Task: merge multi-heads results
         Notes: n_head * [n_seq, n_embd/n_head] --> [n_seq, n_embd]
     """
-    x = None # need to modify
-    
+    x = torch.cat(out_heads, -1)
+
     # Out projection
     x = linear(x, c_proj)  # [n_seq, n_embd] -> [n_seq, n_embd]
-    
+
     return x
 
 
 def transformer_block(x, block, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
     mlp, attn, ln_1, ln_2 = block['mlp'], block['attn'], block['ln_1'], block['ln_2']
-    
+
     # multi-head causal self attention
     x = x + mha(layer_norm(x, ln_1), attn, n_head=n_head)  # [n_seq, n_embd] -> [n_seq, n_embd]
 
@@ -149,7 +165,7 @@ def gpt2(inputs, params, n_head):  # [n_seq] -> [n_seq, n_vocab]
     wte, wpe, blocks, ln_f = params['wte'], params['wpe'], params['blocks'], params['ln_f']
     # token + positional embeddings
     x = wte[inputs] + wpe[range(len(inputs))]  # [n_seq] -> [n_seq, n_embd]
-    
+
     x = torch.Tensor(x)
     # forward pass through n_layer transformer blocks
     for block in blocks:
@@ -168,7 +184,7 @@ def generate(inputs, params, n_head, n_tokens_to_generate):
         next_id = np.argmax(logits[-1])  # greedy sampling
         inputs.append(int(next_id))  # append prediction to input
 
-    return inputs[len(inputs) - n_tokens_to_generate :]  # only return generated ids
+    return inputs[len(inputs) - n_tokens_to_generate:]  # only return generated ids
 
 
 def main(prompt: str, n_tokens_to_generate: int = 5, model_size: str = "124M", models_dir: str = "models"):
@@ -196,4 +212,5 @@ def main(prompt: str, n_tokens_to_generate: int = 5, model_size: str = "124M", m
 
 if __name__ == "__main__":
     import fire
+
     fire.Fire(main)
