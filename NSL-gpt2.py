@@ -6,9 +6,6 @@ import math
 torch.set_printoptions(8)
 
 def to_device(obj):
-    """
-        Move all the Tensor and ndarray to cuda
-    """
     device = torch.device("cuda"  if torch.cuda.is_available()  else "cpu")
 
     if isinstance(obj, torch.Tensor):
@@ -146,6 +143,8 @@ def mha(x, attn, past_key_value, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
         past_key_value[1] = torch.cat((past_key_value[1], linear(x[-1:, :], v_wb)), dim=-2)
 
         qkv = [q, past_key_value[0], past_key_value[1]]
+
+    #print(len(past_key_value[1]))
 
     # Split into heads
     qkv_heads = [qkv_part.chunk(n_head, dim=-1) for qkv_part in
